@@ -1,0 +1,57 @@
+[package]
+name = "rolling-timer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+description = "A small desktop stopwatch that tracks usage in a sliding time window"
+license = "MIT"
+
+[features]
+default = ["gui"]
+gui = ["dep:fltk", "chrono/clock"]
+
+[dependencies]
+# Formatting works with injected zones; only the desktop enables OS timezone lookup.
+chrono = { version = "0.4.42", default-features = false, features = ["alloc"] }
+fltk = { version = "=1.5.23", optional = true, default-features = false, features = ["no-pango", "no-images", "no-gdiplus", "use-ninja", "static-msvcrt"] }
+rusqlite = { version = "0.37", default-features = false, features = ["bundled"] }
+thiserror = { version = "2", default-features = false }
+# Preserve comments and unrelated legacy settings when editing a single preference.
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+# Same-directory temporary files provide atomic replacement, including on Windows.
+tempfile = { version = "3", default-features = false }
+
+[dev-dependencies]
+# Test-only SQLite authorizer injects migration write denials without modifying
+# production storage APIs or mocking SQLite's transaction behavior.
+rusqlite = { version = "0.37", default-features = false, features = ["hooks"] }
+proptest = "1.9"
+
+[[bin]]
+name = "rolling-timer"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+unchecked_time_subtraction = "deny"
+
+# Cocoa requires GUI construction on the OS main thread. A custom harness keeps
+# the desktop scenario there; --ignored explicitly opts into display-dependent work.
+[[test]]
+name = "desktop"
+path = "tests/desktop.rs"
+harness = false
+required-features = ["gui"]

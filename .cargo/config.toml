@@ -1,0 +1,12 @@
+[env]
+CFLTK_TOOLCHAIN = { value = "cmake/fltk-toolchain.cmake", relative = true }
+# The bundled build enables these SQL extensions independently of Cargo
+# features. Our private schema uses none of them. Keep thread safety, API armor,
+# transactions, triggers, constraints and migration support intact.
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_ENABLE_STAT4 -USQLITE_SOUNDEX -USQLITE_ENABLE_LOAD_EXTENSION -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_JSON"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

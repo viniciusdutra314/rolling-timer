@@ -1,0 +1,121 @@
+name: Checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  cross:
+    name: Cross / ${{ matrix.target }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      PROPTEST_CASES: 1000
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-arm64, windows-x86_64, windows-arm64-build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Cross compilation and supported execution gates
+        run: nix develop .#cross --cores 2 --max-jobs 1 -c ./scripts/cross-test.sh ${{ matrix.target }}
+      - if: matrix.target == 'windows-arm64-build'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-arm64-for-guest-testing
+          path: target/aarch64-pc-windows-msvc/release/rolling-timer.exe
+  static-arm64:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix build .#static-arm64 --out-link .scratch/static-arm64 --cores 2 --max-jobs 1
+      - name: Actual ARM64 desktop under QEMU with real X11 input
+        run: nix develop .#cross -c ./scripts/test-static-arm64.sh
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: 2
+      PROPTEST_CASES: 1000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libx11-dev libxext-dev libxft-dev libxinerama-dev libxcursor-dev libxrender-dev libxfixes-dev libfontconfig1-dev xvfb xdotool
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --locked
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test --locked --test desktop -- --ignored --test-threads=1
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test --locked --test process_desktop -- --ignored --test-threads=1
+      - if: runner.os == 'macOS' || runner.os == 'Windows'
+        run: cargo test --locked --test desktop -- --ignored --test-threads=1
+  coverage:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libx11-dev libxext-dev libxft-dev libxinerama-dev libxcursor-dev libxrender-dev libxfixes-dev libfontconfig1-dev xvfb xdotool
+      - run: cargo llvm-cov --all-features --locked --no-report
+      - run: xvfb-run -a cargo llvm-cov --all-features --locked --no-report --test desktop -- --ignored --test-threads=1
+      - run: xvfb-run -a cargo llvm-cov --all-features --locked --no-report --test process_desktop -- --ignored --test-threads=1
+      - run: cargo llvm-cov report --lcov --output-path lcov.info
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: lcov.info
+      - run: cargo llvm-cov report --fail-under-lines 100
+  miri:
+    runs-on: ubuntu-22.04
+    env:
+      PROPTEST_CASES: 8
+      MIRIFLAGS: -Zmiri-strict-provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly-2026-09-19
+        with:
+          components: miri, rust-src
+      - run: cargo miri test --no-default-features --test domain
+  sanitizers:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly-2026-09-19
+        with:
+          components: rust-src
+      - name: AddressSanitizer (Rust and SQLite)
+        env:
+          CC: clang
+          CFLAGS: -fsanitize=address -fno-omit-frame-pointer
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+        run: cargo test --locked --no-default-features -Zbuild-std --target x86_64-unknown-linux-gnu
+      - name: AddressSanitizer (Rust, SQLite and FLTK widgets)
+        env:
+          CARGO_TARGET_DIR: target/asan-gui
+          CC: clang
+          CXX: clang++
+          CFLAGS: -fsanitize=address -fno-omit-frame-pointer
+          CXXFLAGS: -fsanitize=address -fno-omit-frame-pointer
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build libx11-dev libxext-dev libxft-dev libxinerama-dev libxcursor-dev libxrender-dev libxfixes-dev libfontconfig1-dev xvfb
+          xvfb-run -a cargo test --locked -Zbuild-std --target x86_64-unknown-linux-gnu --test desktop -- --ignored --test-threads=1
+      - name: UndefinedBehaviorSanitizer (SQLite)
+        env:
+          CARGO_TARGET_DIR: target/ubsan
+          CFLAGS: -fsanitize=undefined -fno-sanitize-recover=all
+          RUSTFLAGS: -Clink-arg=-lubsan
+        run: cargo test --locked --no-default-features --test storage

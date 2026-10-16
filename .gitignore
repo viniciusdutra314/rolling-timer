@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Rust and local experiments
+/target/
+/.scratch/
+/.direnv/
+/result
+!.envrc

@@ -1,0 +1,104 @@
+name: Release binaries
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: .exe
+          - os: macos-15
+            target: aarch64-apple-darwin
+            suffix: ''
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            suffix: ''
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: 2
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: cargo fetch --locked
+      - run: cargo test --locked
+      - run: cargo test --locked --test desktop -- --ignored --test-threads=1
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+      - shell: bash
+        run: ./scripts/package-release.sh target/${{ matrix.target }}/release/rolling-timer${{ matrix.suffix }} ${{ matrix.target }} dist
+      - if: runner.os == 'macOS'
+        run: otool -L target/${{ matrix.target }}/release/rolling-timer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rolling-timer-${{ matrix.target }}
+          path: dist/*
+  linux-static:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: static
+            target: x86_64-unknown-linux-musl
+          - package: static-arm64
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build and test the fully static target
+        run: nix build .#${{ matrix.package }} --cores 2 --max-jobs 1
+      - name: Check the actual ELF and launch with an empty environment
+        run: |
+          readelf -l result/bin/rolling-timer
+          readelf -d result/bin/rolling-timer
+          if [[ '${{ matrix.package }}' == static-arm64 ]]; then
+            nix develop .#cross -c qemu-aarch64 result/bin/rolling-timer --version
+          else
+            env -i HOME="$RUNNER_TEMP" result/bin/rolling-timer --version
+          fi
+      - name: Exercise the actual release with real X11 input
+        run: |
+          if [[ '${{ matrix.package }}' == static-arm64 ]]; then
+            nix develop .#cross -c ./scripts/test-static-arm64.sh result/bin/rolling-timer
+          else
+            nix develop -c env ROLLING_TIMER_TEST_BINARY="$PWD/result/bin/rolling-timer" ./scripts/gui-test.sh e2e
+          fi
+      - name: Package executable and full notices
+        run: |
+          nix develop -c cargo fetch --locked
+          nix develop -c ./scripts/package-release.sh result/bin/rolling-timer ${{ matrix.target }} dist result/share/rolling-timer/licenses
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rolling-timer-${{ matrix.target }}
+          path: dist/*
+  draft:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [native, linux-static]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create a reviewable draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          gh release create "$TAG" artifacts/* --draft --title "Rolling Timer $TAG" --notes 'Extract the archive for your platform and run rolling-timer. Includes SQLite, FLTK and full third-party notices. Linux embeds its client/font libraries and requires X11/XWayland plus installed fonts. See README for portability limits and verify the accompanying SHA-256 checksum.'
