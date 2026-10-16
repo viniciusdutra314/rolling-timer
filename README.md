@@ -22,6 +22,19 @@ python3 rolling_timer.py
 
 Sessions are stored in a SQLite3 database and the window setting in TOML, under `~/.rolling_timer/` (your home directory).
 
+## Rust development shell
+
+The Nix flake provides Rust/Cargo 1.91.0, rustfmt, and Clippy on Linux
+(x86_64 and ARM64) and macOS (Apple Silicon only), using nixpkgs 26.05 stable.
+Nix must have `nix-command` and `flakes` enabled.
+
+```sh
+nix develop
+cargo --version
+```
+
+If you use direnv with Nix support, run `direnv allow` to load the shell automatically.
+
 ## Philosophy
 
 One Python file, roughly 200 lines, and only the standard library. The point is to be **simple, useful, and easy to hack on**
